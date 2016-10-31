@@ -6,6 +6,7 @@
 #include <sstream>
 #include <list>
 #include <algorithm>
+#include <omp.h>
 
 
 using namespace std;
@@ -13,6 +14,12 @@ using namespace std;
 
 typedef unsigned char uchar;
 using vvchar = vector<vector<char> >;
+
+vector<ofstream*> of_vec;
+int range_start = 1;
+string chr_num;
+
+
 
 vector<string> pullNames(string);
 uchar ** convertVecToData(vvchar &);
@@ -231,7 +238,7 @@ class vcf_data {
 			stringstream s(line);
 			string junk, ref, alt, hap, info;
 			int phys;
-			s >> junk >> phys >> junk >> ref >> alt >> junk >> junk >> info;
+			s >> chr_num >> phys >> junk >> ref >> alt >> junk >> junk >> info;
 			vector<string> info_s = split(info,";");
 			if(ref.size() != 1 || isIndel(info_s) || isCpg(info_s)) {
 				continue;
@@ -280,6 +287,15 @@ class vcf_data {
 			}
 			cout << endl;
 		}
+	}
+	vector<int> getRareIdx(int mn, int mx) {
+		vector<int> out;
+		for(int i = 0; i < snps.size(); i++) {
+			if(snps[i].allele_count >= mn && snps[i].allele_count <= mx) {
+				out.push_back(i);
+			}
+		}
+		return out;
 	}
 	int getSnpDist(int base, int end) {
 		return snps[base].position - snps[end].position;
@@ -374,7 +390,7 @@ string ast(double a, bool b) {
 
 class output_data {
 	public:
-	int pos;
+	int pos, count;
 	int p1_5_bp, p2_5_bp, p1_3_bp, p2_3_bp, p1_total_bp, p2_total_bp;
 	double p1_5_gen, p2_5_gen, p1_3_gen, p2_3_gen, p1_total_gen, p2_total_gen;
 	bool same_1,same_2;
@@ -385,6 +401,7 @@ class output_data {
 		int front_end = 0;
 		int back_end = vcf.snp_count-1;
 		single_phase = 0;
+		count = vcf.snps[h1.snp_id].allele_count;
 		ann = vcf.snps[h1.snp_id].annotation;
 		pos = vcf.snps[h1.snp_id].position;
 		p1_5_bp = vcf.getSnpDist(h1.data_right.maxhap,h1.snp_id);
@@ -400,57 +417,12 @@ class output_data {
 		p2_5_gen = vcf.getSnpGm(h2.data_right.maxhap,h2.snp_id);
 		p2_3_gen = vcf.getSnpGm(h2.snp_id,h2.data_left.maxhap);
 		p1_total_bp = 0, p2_total_bp = 0, p1_total_gen = 0, p2_total_gen = 0;
-		int phys_1_idx = 0, phys_2_idx = 0, gen_1_idx = 0, gen_2_idx = 0;
-		for(auto itr = h1.hap_idx_list.begin(); itr != h1.hap_idx_list.end(); ++itr) {
-			int i = *itr;
-			int t = vcf.getSnpDist(h1.data_right.cutoffs[i],h1.data_left.cutoffs[i]);
-			if (t > p1_total_bp) {
-				p1_total_bp = t;
-				phys_1_idx = i;
-			}
-			/*t = vcf.getSnpDist(h2.data_right.cutoffs[i],h2.data_left.cutoffs[i]);
-			if (t > p2_total_bp) {
-				p2_total_bp = t;
-				phys_2_idx = i;
-			}*/
-			double g = vcf.getSnpGm(h1.data_right.cutoffs[i],h1.data_left.cutoffs[i]);
-			if (g > p1_total_gen) {
-				p1_total_gen = g;
-				gen_1_idx = i;
-			}
-			/*g = vcf.getSnpGm(h2.data_right.cutoffs[i],h2.data_left.cutoffs[i]);
-			if (g > p2_total_gen) {
-				p2_total_gen = g;
-				gen_2_idx = i;
-			}*/
-			if(h1.data_right.cutoffs[phys_1_idx] == back_end || h1.data_left.cutoffs[phys_1_idx] == front_end) { end_flags[8] = 1; }
-			//if(h2.data_right.cutoffs[phys_2_idx] == back_end || h2.data_left.cutoffs[phys_2_idx] == front_end) { end_flags[9] = 1; }
-			if(h1.data_right.cutoffs[gen_1_idx] == back_end || h1.data_left.cutoffs[gen_1_idx] == front_end) { end_flags[10] = 1; }
-			//if(h2.data_right.cutoffs[gen_2_idx] == back_end || h2.data_left.cutoffs[gen_2_idx] == front_end) { end_flags[11] = 1; }
-		}
-		for(auto itr = h2.hap_idx_list.begin(); itr != h2.hap_idx_list.end(); ++itr) {
-			int i = *itr;
-			int t = vcf.getSnpDist(h2.data_right.cutoffs[i],h2.data_left.cutoffs[i]);
-			if (t > p2_total_bp) {
-				p2_total_bp = t;
-				phys_2_idx = i;
-			}
-			double g = vcf.getSnpGm(h2.data_right.cutoffs[i],h2.data_left.cutoffs[i]);
-			if (g > p2_total_gen) {
-				p2_total_gen = g;
-				gen_2_idx = i;
-			}
-			if(h2.data_right.cutoffs[phys_2_idx] == back_end || h2.data_left.cutoffs[phys_2_idx] == front_end) { end_flags[9] = 1; }
-			if(h2.data_right.cutoffs[gen_2_idx] == back_end || h2.data_left.cutoffs[gen_2_idx] == front_end) { end_flags[11] = 1; }
-		}
-		same_1 = (phys_1_idx == gen_1_idx);
-		same_2 = (phys_2_idx == gen_2_idx);
-
 	}
 	output_data(vcf_data & vcf, hapset & h1) {
 		int front_end = 0;
 		int back_end = vcf.snp_count-1;
 		single_phase = 1;
+		count = vcf.snps[h1.snp_id].allele_count;
 		ann = vcf.snps[h1.snp_id].annotation;
 		pos = vcf.snps[h1.snp_id].position;
 		p1_5_bp = vcf.getSnpDist(h1.data_right.maxhap,h1.snp_id);
@@ -463,38 +435,17 @@ class output_data {
 		p1_3_gen = vcf.getSnpGm(h1.snp_id,h1.data_left.maxhap);
 		p2_5_gen = 0;
 		p2_3_gen = 0;
-		p1_total_bp = 0, p2_total_bp = 0, p1_total_gen = 0, p2_total_gen = 0;
-		int phys_1_idx = 0, phys_2_idx = 0, gen_1_idx = 0, gen_2_idx = 0;
-		for(auto itr = h1.hap_idx_list.begin(); itr != h1.hap_idx_list.end(); ++itr) {
-			int i = *itr;
-			int t = vcf.getSnpDist(h1.data_right.cutoffs[i],h1.data_left.cutoffs[i]);
-			if (t > p1_total_bp) {
-				p1_total_bp = t;
-				phys_1_idx = i;
-			}
-			p2_total_bp = 0;
-			double g = vcf.getSnpGm(h1.data_right.cutoffs[i],h1.data_left.cutoffs[i]);
-			if (g > p1_total_gen) {
-				p1_total_gen = g;
-				gen_1_idx = i;
-			}
-			p2_total_gen = 0;
-			if(h1.data_right.cutoffs[phys_1_idx] == back_end || h1.data_left.cutoffs[phys_1_idx] == front_end) { end_flags[8] = 1; }
-			if(h1.data_right.cutoffs[gen_1_idx] == back_end || h1.data_left.cutoffs[gen_1_idx] == front_end) { end_flags[10] = 1; }
-		}
-		same_1 = (phys_1_idx == gen_1_idx);
-		same_2 = 1;
 
 	}
 	output_data() { }
 	void printData() {
-		//cout << pos << '\t' << p1_5_bp << '\t' << p2_5_bp << '\t' << p1_3_bp << '\t' << p2_3_bp << '\t' << p1_5_gen << '\t' << p2_5_gen << '\t' << p1_3_gen << '\t' << p2_3_gen << '\t' << p1_total_bp << '\t' << p2_total_bp << '\t' << p1_total_gen << '\t' << p2_total_gen << '\t' << same_1 << '\t' << same_2 << endl;
-		cout << pos << '\t' << ast(p1_5_bp,end_flags[0]) << ast(p1_3_bp,end_flags[1]) << ast(p2_5_bp,end_flags[2]) << ast(p2_3_bp,end_flags[3]) << ast(p1_5_gen,end_flags[4]) << ast(p1_3_gen,end_flags[5]) << ast(p2_5_gen,end_flags[6]) << ast(p2_3_gen,end_flags[7]) << ast(p1_total_bp,end_flags[8]) << ast(p2_total_bp,end_flags[9]) << ast(p1_total_gen,end_flags[10]) << ast(p2_total_gen,end_flags[11]) << same_1 << '\t' << same_2 << '\t' << ann << endl;
+		*of_vec[count - range_start] << chr_num << '\t' << pos << '\t' << ast(p1_5_bp,end_flags[0]) << ast(p1_3_bp,end_flags[1]) << ast(p2_5_bp,end_flags[2]) << ast(p2_3_bp,end_flags[3]) << ast(p1_5_gen,end_flags[4]) << ast(p1_3_gen,end_flags[5]) << ast(p2_5_gen,end_flags[6]) << ast(p2_3_gen,end_flags[7]) << ann << endl;
 	}
 
 
 
 };
+
 
 uchar ** convertVecToData(vvchar & hap_hold) {
 	int hap_count = hap_hold.size();
@@ -711,22 +662,21 @@ void printVerify(vcf_data & vcf, hapset & h) {
 }
 
 
-void findLongestHaps(vcf_data & vcf, int idx) {
+list<output_data> findLongestHaps(vcf_data & vcf, int idx) {
 	vector<int> rare_idx;
 	vector<hapset> vh;
+	list<output_data> out_list;
 	if(vcf.snps[idx].allele_count == 1) {
-		//cout << "SINGLETON\n";
 		vector<int> rare_idx;
 		list<int> comparison_haps = getSampleListSingle(vcf,idx,rare_idx,0);
-		//cout << "SINGLE " << rare_idx[0] << " " << rare_idx[1] << endl;
 		hapset h1(rare_idx[0],idx,vcf.hap_count,comparison_haps,rare_idx[1]);
 		hapset h2(rare_idx[1],idx,vcf.hap_count,comparison_haps,rare_idx[0]);
 		findMax(vcf,h1);
 		findMax(vcf,h2);
 		output_data od(vcf,h1,h2);
-		od.printData();
+		out_list.push_back(od);
+		//od.printData();
 	} else { 
-		//cout << "MULTI-COPY " << vcf.snps[idx].allele_count << endl;
 		vector<int> rare_single, rare_double;
 		list<int> comparison_haps = getSampleListMult(vcf,idx,rare_single,rare_double,0);
 		//for(int ip = 0; ip < rare_single.size(); ip++) {
@@ -745,40 +695,84 @@ void findLongestHaps(vcf_data & vcf, int idx) {
 			findMax(vcf,h1);
 			findMax(vcf,h2);
 			output_data od(vcf,h1,h2);
-			od.printData();
+			out_list.push_back(od);
+			//od.printData();
 		}
 		for(int i = 0; i < rare_double.size(); i+=2) {
 			hapset h1(rare_double[i],idx,vcf.hap_count,comparison_haps);
 			findMax(vcf,h1);
 			output_data od(vcf,h1);
-			od.printData();
+			out_list.push_back(od);
+			//od.printData();
 			hapset h2(rare_double[i+1],idx,vcf.hap_count,comparison_haps);
 			findMax(vcf,h2);
 			output_data od2(vcf,h2);
-			od2.printData();
+			out_list.push_back(od2);
+			//od2.printData();
 		}
 	}
-
+	return out_list;
 }
 		
-
+int printCurrentResults(list<output_data> * ol, bool * flags, int max, int & prevcount) {
+	for (int i = prevcount; i < max; i++) {
+		if (flags[i] == 0) { return 0; }
+		for (auto itr = ol[i].begin(); itr != ol[i].end(); ++itr) {
+			(*itr).printData();
+		}
+		prevcount++;
+	}
+	return 1;
+}
 
 
 
 int main(int argc, char ** argv) {
 	setbuf(stdout,NULL);
-	srand(1);
-	string vcf_name = argv[1];
+	int seed = 1;
+	string map_name, vcf_name, output_tag = "rare_allele_run";
 	vcf_data v;
+	int range_end = 10;
+	for(int i = 0; i < argc; i++) {
+		string arg = argv[i];
+		if(arg == "-i") { vcf_name = argv[++i]; }
+		if(arg == "-m") { map_name = argv[++i]; }
+		if(arg == "-r") { range_start = atoi(argv[++i]); range_end = atoi(argv[++i]); }
+		if(arg == "-o") { output_tag = argv[++i]; }
+
+
+	}
+	srand(seed);
+	output_tag += ".results";
 	v.readVcf(vcf_name);
-	string map_name = argv[2];
 	v.addGenData(map_name,0);
-	//v.printVcf();
-	for(int i = 0; i < v.snps.size(); i++) {
-		if(v.snps[i].allele_count <= 5 && v.snps[i].allele_count > 0) {
-			findLongestHaps(v,i);
+	for (int i = 0; i <= range_end - range_start; i++) {
+		string filename = output_tag+"."+to_string(range_start+i);
+		ofstream *op = new ofstream(filename.c_str());
+		of_vec.push_back(op);
+	}
+	vector<int> rareIdx = v.getRareIdx(range_start,range_end);
+
+	
+	list<output_data> * output_hold = new list<output_data>[rareIdx.size()];
+	bool * output_flag = new bool[rareIdx.size()];
+
+	for(int i = 0; i < rareIdx.size(); i++) {
+		output_flag[i] = 0;
+
+	}
+	int output_loc = 0;
+	#pragma omp parallel for ordered schedule(dynamic,50)
+	for (int ii = 0; ii < rareIdx.size(); ii++) {
+		int i = rareIdx[ii];
+		output_hold[ii] = findLongestHaps(v,i);
+		output_flag[ii] = 1;
+		if (ii%100 == 0) {
+			#pragma omp critical
+			printCurrentResults(output_hold,output_flag,rareIdx.size(),output_loc);
 		}
 	}
+	printCurrentResults(output_hold,output_flag,rareIdx.size(),output_loc);
 	return 0;
 }
 
