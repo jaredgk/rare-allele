@@ -18,6 +18,7 @@ using vvchar = vector<vector<char> >;
 vector<ofstream*> of_vec;
 int range_start = 1;
 string chr_num;
+int compress_flag = 0;
 
 
 
@@ -206,6 +207,23 @@ class snp_data {
 	}
 };
 
+void addGeno(vector<char> & hap, char hh, int idx) {
+	uchar h = (unsigned char)((hh == '0') ? 0 : 1);
+	if(compress_flag == 0) {
+		hap.push_back(h);
+		return;
+	}
+	int res = idx%8;
+	int offset = pow(2,7-res);
+	uchar add = (unsigned char)(int(h)*offset);
+	if(res == 0) {
+		hap.push_back(add);
+	} else {
+		hap[hap.size()-1] += add;
+	}
+	return;
+}
+
 class vcf_data {
 	public:
 	uchar ** data;
@@ -217,15 +235,32 @@ class vcf_data {
 	vector<snp_data> snps;
 	vector<string> indiv_list;
 	char getHap(int hap, int snp) {
-		return char(data[hap][snp]);
+		if(compress_flag == 0) {
+			return char(data[hap][snp]);
+		}
+		int idx = snp/8;
+		int reg = pow(2,7-(snp%8));
+		int ti = int(data[hap][idx])%(2*reg);
+		ti /= reg;
+		uchar out = (unsigned char)ti;
+		//cout << hap << " " << snp << " " << idx << " " << reg << " " << ti << " " << int(out) << endl;
+		//out /= reg;
+		return char(out);
 	}
 	void readVcf(string filename) {
+		istream *inf;
 		ifstream infile;
-		infile.open(filename.c_str());
+		if(filename.size() == 0) { inf = &cin; }
+		else { 
+			infile.open(filename.c_str());
+			inf = &infile;
+		}
+		//infile.open(filename.c_str());
 		string line;
 		vvchar hap_hold;
 		bool vector_set = 0;
-		while(getline(infile,line)) {
+		int snp_num = 0;
+		while(getline(*inf,line)) {
 			if(line[0] == '#') {
 				if(line[1] != '#') {
 					indiv_list = pullNames(line);
@@ -246,6 +281,7 @@ class vcf_data {
 			int ac = 0;
 			int phased = -1;
 			int ind_idx = 0;
+			//int snp_num = 0;
 			string annotation = typeLabel(info_s);
 			s >> junk;
 			while(s >> hap) {
@@ -256,34 +292,34 @@ class vcf_data {
 					hap_hold.push_back(t2);
 				}
 				if(phased == -1) { phased = (hap[1] == '|') ? 1 : 0; }
-				if(hap[0] == '0') { 
-					hap_hold[ind_idx++].push_back(0);
-				} else {
-					hap_hold[ind_idx++].push_back(1);
+				if(hap[0] != '0') { 
 					ac++;
 				}
-				if(hap[2] == '0') {
-					hap_hold[ind_idx++].push_back(0);
-				} else {
-					hap_hold[ind_idx++].push_back(1);
+				if(hap[2] != '0') {
 					ac++;
 				}
+				addGeno(hap_hold[ind_idx],hap[0],snp_num);
+				ind_idx++;
+				addGeno(hap_hold[ind_idx],hap[2],snp_num);
+				ind_idx++;
 			}
 			snp_data snp(ac,phys,phased,annotation);
 			snps.push_back(snp);
 			vector_set = 1;
+			snp_num++;
 		}
 		snp_count = snps.size();
 		hap_count = hap_hold.size();
 		data = convertVecToData(hap_hold);
 	}
-	void printVcf() {
+	void print() {
 		cout << "Hap count: " << hap_count << endl;
 		cout << "Snp count: " << snp_count << endl;
 		for(int i = 0; i < snp_count; i++) {
 			cout << "Snp " << i << ", position " << snps[i].position << ", genetic " << snps[i].genetic_position << " " << gendist_minmax[0] << " " << gendist_minmax[1] << " " ;
 			for(int j = 0; j < hap_count; j++) {
-				cout << int(data[j][i]);
+				//cout << int(data[j][i]);
+				cout << int(getHap(j,i));
 			}
 			cout << endl;
 		}
@@ -293,6 +329,7 @@ class vcf_data {
 		for(int i = 0; i < snps.size(); i++) {
 			if(snps[i].allele_count >= mn && snps[i].allele_count <= mx) {
 				out.push_back(i);
+				//cout << i << endl;
 			}
 		}
 		return out;
@@ -446,19 +483,46 @@ class output_data {
 
 };
 
+uchar * compressHapRow(vector<char> & v, int snp_count) {
+	int comp_size = (snp_count+7)/8;
+	//cout << comp_size << endl;
+	uchar * out = new uchar[comp_size];
+	for(int i = 0; i < comp_size; i++) {
+		int t = 0;
+		for(int j = 0; j < 8; j++) {
+			int reg = pow(2,7-j);
+			int old_idx = 8*i+j;
+			if(old_idx >= snp_count) { break; }
+			t += reg*int(v[old_idx]);
+			//cout << t << " " << int(v[old_idx]) << endl;
+		}
+		out[i] = (unsigned char)t;
+		//cout << int(out[i]) << endl;
+	}
+	return out;
+}
+
 
 uchar ** convertVecToData(vvchar & hap_hold) {
+	cout << compress_flag << endl;
 	int hap_count = hap_hold.size();
 	int snp_count = hap_hold[0].size();
 	uchar ** d = new uchar*[hap_count];
 	for(int i = 0; i < hap_hold.size(); i++) {
+		/*if(compress_flag == 1) {
+			d[i] = compressHapRow(hap_hold[i],snp_count);
+		} else {*/
+			//cout << snp_count << endl;
 		d[i] = new uchar[snp_count];
 		for(int j = 0; j < snp_count; j++) {
 			d[i][j] = hap_hold[i][j];
 		}
-		hap_hold[i].clear();
+		//}
+		//hap_hold[i].clear();
 		(vector<char>()).swap(hap_hold[i]);
 	}
+	(vvchar()).swap(hap_hold);
+	cout << "After swaps\n";
 	return d;
 
 
@@ -607,9 +671,9 @@ void findMax(vcf_data & vcf, hapset & h) {
 			break;
 		}
 	}
-	h.data_left.maxhap = i;
+	h.data_left.maxhap = (i >= 0 ? i : 0);
 	//cout << i << endl;
-	if(i == 0) {
+	if(i <= 0) {
 		h.fillLeft(0);
 		//cout << "filling left side\n";
 	}
@@ -730,7 +794,7 @@ int printCurrentResults(list<output_data> * ol, bool * flags, int max, int & pre
 int main(int argc, char ** argv) {
 	setbuf(stdout,NULL);
 	int seed = 1;
-	string map_name, vcf_name, output_tag = "rare_allele_run";
+	string map_name, vcf_name = "", output_tag = "rare_allele_run";
 	vcf_data v;
 	int range_end = 10;
 	for(int i = 0; i < argc; i++) {
@@ -739,6 +803,7 @@ int main(int argc, char ** argv) {
 		if(arg == "-m") { map_name = argv[++i]; }
 		if(arg == "-r") { range_start = atoi(argv[++i]); range_end = atoi(argv[++i]); }
 		if(arg == "-o") { output_tag = argv[++i]; }
+		if(arg == "-c") { compress_flag = 1; }
 
 
 	}
@@ -753,7 +818,7 @@ int main(int argc, char ** argv) {
 	}
 	vector<int> rareIdx = v.getRareIdx(range_start,range_end);
 
-	
+	//v.print();
 	list<output_data> * output_hold = new list<output_data>[rareIdx.size()];
 	bool * output_flag = new bool[rareIdx.size()];
 
@@ -761,13 +826,14 @@ int main(int argc, char ** argv) {
 		output_flag[i] = 0;
 
 	}
+	//return 0;
 	int output_loc = 0;
 	#pragma omp parallel for ordered schedule(dynamic,50)
 	for (int ii = 0; ii < rareIdx.size(); ii++) {
 		int i = rareIdx[ii];
 		output_hold[ii] = findLongestHaps(v,i);
 		output_flag[ii] = 1;
-		if (ii%100 == 0) {
+		if (ii%1000 == 0) {
 			#pragma omp critical
 			printCurrentResults(output_hold,output_flag,rareIdx.size(),output_loc);
 		}
