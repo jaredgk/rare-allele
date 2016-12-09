@@ -19,6 +19,8 @@ vector<ofstream*> of_vec;
 int range_start = 1;
 string chr_num;
 int compress_flag = 0;
+int no_gen_map = 1;
+int ignore_singletons = 0;
 
 
 
@@ -33,6 +35,7 @@ bool nearZero(double a) {
 
 vector<string> split(string s, string delim) {
 	vector<string> out;
+	if(s.size() == 0) { return out; }
 	int pos = 0;
 	string token;
 	while ((pos = s.find(delim)) != string::npos) {
@@ -44,7 +47,7 @@ vector<string> split(string s, string delim) {
 	return out;
 }
 
-void addToVector(vector<string> & a, string b) {
+void addToVector(vector<string> & a, string & b) {
 	for(int i = 0; i < a.size(); i++) {
 		if(a[i].compare(b) == 0) { return; }
 	}
@@ -52,7 +55,7 @@ void addToVector(vector<string> & a, string b) {
 
 }
 
-string getCategory(string s) {
+string getCategory(string & s) {
 	if(s.find("HIGH") != string::npos) {
 		return "HIGH";
 	} else if(s.find("MODERATE") != string::npos) {
@@ -67,6 +70,7 @@ string typeLabel(vector<string> & info_s) {
 	string out;
 	vector<string> vout;
 	string category;
+	int ann_found = 0;
 	for(int i = 0; i < info_s.size(); i++) {
 		vector<string> s = split(info_s[i],"=");
 		if(s[0].compare("ANN") == 0) {
@@ -76,8 +80,10 @@ string typeLabel(vector<string> & info_s) {
 				vector<string> al = split(anns[j],"|");
 				addToVector(vout,al[1]);
 			}
+			ann_found = 1;
 		}
 	}
+	if(ann_found == 0) { return ""; }
 	out += (category + ",");
 	for(int i = 0; i < vout.size(); i++) {
 		out += vout[i];
@@ -127,7 +133,7 @@ class hapset {
 	list<int> hap_idx_list;
 	maxhapdata data_left;
 	maxhapdata data_right;
-	hapset(int hap, int snp, int hap_count, list<int> & hil) {
+	hapset(int hap, int snp, int hap_count, list<int>  hil) {
 		hap_id = hap;
 		snp_id = snp;
 		hap_idx_list = hil;
@@ -136,7 +142,7 @@ class hapset {
 		data_left = t1;
 		data_right = t2;
 	}
-	hapset(int hap, int snp, int hap_count, list<int> & hil, int extra) {
+	hapset(int hap, int snp, int hap_count, list<int>  hil, int extra) {
 		hap_id = hap;
 		snp_id = snp;
 		hap_idx_list = hil;
@@ -199,7 +205,7 @@ class snp_data {
 		return 0;
 	}
 	bool isValidForComp() {
-		if(allele_count > 2) {
+		if(allele_count >= 2 || (ignore_singletons == 0 && allele_count == 1)) {
 			return 1;
 		}
 		//Add check for CpG flag
@@ -282,7 +288,11 @@ class vcf_data {
 			int phased = -1;
 			int ind_idx = 0;
 			//int snp_num = 0;
-			string annotation = typeLabel(info_s);
+			string annotation = "";
+			if(vector_set == 0) { cout << "VECTOR_SET: " << info_s.size() << endl; }
+			if (info_s.size() != 0) {
+				annotation = typeLabel(info_s);
+			}
 			s >> junk;
 			while(s >> hap) {
 				if(vector_set == 0) {
@@ -324,10 +334,10 @@ class vcf_data {
 			cout << endl;
 		}
 	}
-	vector<int> getRareIdx(int mn, int mx) {
+	vector<int> getRareIdx(int mn, int mx, int pos) {
 		vector<int> out;
 		for(int i = 0; i < snps.size(); i++) {
-			if(snps[i].allele_count >= mn && snps[i].allele_count <= mx) {
+			if(snps[i].allele_count >= mn && snps[i].allele_count <= mx && snps[i].position >= pos) {
 				out.push_back(i);
 				//cout << i << endl;
 			}
@@ -476,7 +486,9 @@ class output_data {
 	}
 	output_data() { }
 	void printData() {
-		*of_vec[count - range_start] << chr_num << '\t' << pos << '\t' << ast(p1_5_bp,end_flags[0]) << ast(p1_3_bp,end_flags[1]) << ast(p2_5_bp,end_flags[2]) << ast(p2_3_bp,end_flags[3]) << ast(p1_5_gen,end_flags[4]) << ast(p1_3_gen,end_flags[5]) << ast(p2_5_gen,end_flags[6]) << ast(p2_3_gen,end_flags[7]) << ann << endl;
+		*of_vec[count - range_start] << chr_num << '\t' << pos << '\t' << ast(p1_5_bp,end_flags[0]) << ast(p1_3_bp,end_flags[1]) << ast(p2_5_bp,end_flags[2]) << ast(p2_3_bp,end_flags[3]);
+		if(no_gen_map == 0) { *of_vec[count-range_start] << ast(p1_5_gen,end_flags[4]) << ast(p1_3_gen,end_flags[5]) << ast(p2_5_gen,end_flags[6]) << ast(p2_3_gen,end_flags[7]); }
+		*of_vec[count-range_start] << ann << endl;
 	}
 
 
@@ -574,10 +586,13 @@ list<int> getSampleListSingle(vcf_data & vcf, int idx, vector<int> & rare_idx, i
 		if(h1 == 0 && h2 == 0) {
 			vhold.push_back(i);
 			vhold.push_back(i+1);
-		} else {
+		} else if (h1 == 1) {
 			rare_idx.push_back(i);
 			rare_idx.push_back(i+1);
-		}	
+		} else {
+			rare_idx.push_back(i+1);
+			rare_idx.push_back(i);
+		}
 	}
 	if(subsample == 0) {
 		//cout << "Adding to list\n";
@@ -739,6 +754,9 @@ list<output_data> findLongestHaps(vcf_data & vcf, int idx) {
 		findMax(vcf,h2);
 		output_data od(vcf,h1,h2);
 		out_list.push_back(od);
+		//cout << vcf.snps[idx].position << endl;
+		//printVerify(vcf,h1);
+		//printVerify(vcf,h2);
 		//od.printData();
 	} else { 
 		vector<int> rare_single, rare_double;
@@ -797,26 +815,35 @@ int main(int argc, char ** argv) {
 	string map_name, vcf_name = "", output_tag = "rare_allele_run";
 	vcf_data v;
 	int range_end = 10;
-	for(int i = 0; i < argc; i++) {
+	int pos_start = 0;
+	for(int i = 1; i < argc; i++) {
 		string arg = argv[i];
 		if(arg == "-i") { vcf_name = argv[++i]; }
-		if(arg == "-m") { map_name = argv[++i]; }
-		if(arg == "-r") { range_start = atoi(argv[++i]); range_end = atoi(argv[++i]); }
-		if(arg == "-o") { output_tag = argv[++i]; }
-		if(arg == "-c") { compress_flag = 1; }
-
+		else if(arg == "-m") { map_name = argv[++i]; no_gen_map = 0; }
+		else if(arg == "-r") { range_start = atoi(argv[++i]); range_end = atoi(argv[++i]); }
+		else if(arg == "-o") { output_tag = argv[++i]; }
+		else if(arg == "-c") { compress_flag = 1; }
+		else if(arg == "-p") { pos_start = atoi(argv[++i]); }
+		else if(arg == "--ignore-singletons") { ignore_singletons = 1; }
+		else {
+			cerr << "Invalid option: " << arg << endl;
+			return 0;
+		}
 
 	}
+	//cout << ignore_singletons << endl;
 	srand(seed);
 	output_tag += ".results";
 	v.readVcf(vcf_name);
-	v.addGenData(map_name,0);
+	if (no_gen_map == 0) {
+		v.addGenData(map_name,0);
+	}
 	for (int i = 0; i <= range_end - range_start; i++) {
 		string filename = output_tag+"."+to_string(range_start+i);
 		ofstream *op = new ofstream(filename.c_str());
 		of_vec.push_back(op);
 	}
-	vector<int> rareIdx = v.getRareIdx(range_start,range_end);
+	vector<int> rareIdx = v.getRareIdx(range_start,range_end,pos_start);
 
 	//v.print();
 	list<output_data> * output_hold = new list<output_data>[rareIdx.size()];
