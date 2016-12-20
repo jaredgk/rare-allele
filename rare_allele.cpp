@@ -21,6 +21,7 @@ string chr_num;
 int compress_flag = 0;
 int no_gen_map = 1;
 int ignore_singletons = 0;
+int ac_for_list = 100;
 
 
 
@@ -114,21 +115,25 @@ bool isIndel(vector<string> & info_s) {
 class maxhapdata {
 	public:
 	vector<int> cutoffs;
-	int maxhap;
+	int maxhap, remaining;
 	maxhapdata() {
 
 	};
-	maxhapdata(int size) {
-		vector<int> t(size,-1);
+	maxhapdata(int size, list<int> & idl) {
+		vector<int> t(size,-2);
 		cutoffs = t;
 		maxhap = -1;
+		remaining = idl.size();
+		for (auto i = idl.begin(); i != idl.end(); i++) {
+			cutoffs[*i] = -1;
+		}
 	}
 	
 };
 
 class hapset {
 	public:
-	int hap_id; //Even number, hap_id and hap_id+1 are idxs of indiv with rare allele
+	int hap_id; 
 	int snp_id;
 	list<int> hap_idx_list;
 	maxhapdata data_left;
@@ -137,8 +142,8 @@ class hapset {
 		hap_id = hap;
 		snp_id = snp;
 		hap_idx_list = hil;
-		maxhapdata t1(hap_count);
-		maxhapdata t2(hap_count);
+		maxhapdata t1(hap_count,hap_idx_list);
+		maxhapdata t2(hap_count,hap_idx_list);
 		data_left = t1;
 		data_right = t2;
 	}
@@ -148,8 +153,8 @@ class hapset {
 		hap_idx_list = hil;
 		hap_idx_list.push_back(extra);
 		hap_idx_list.sort();
-		maxhapdata t1(hap_count);
-		maxhapdata t2(hap_count);
+		maxhapdata t1(hap_count,hap_idx_list);
+		maxhapdata t2(hap_count,hap_idx_list);
 		data_left = t1;
 		data_right = t2;
 	}
@@ -187,16 +192,26 @@ class snp_data {
 	int phased;
 	double genetic_position;
 	string annotation;
-	snp_data(int ac, int pos, int phs) {
+	bool rare = 0;
+	list<int> hap_ids;
+	snp_data(int ac, int pos, int phs, list<int> hi) {
 		allele_count = ac;
 		position = pos;
 		phased = phs;
+		if (ac <= ac_for_list) { 
+			rare = 1; 
+			hap_ids = hi;
+		}
 	}
-	snp_data(int ac, int pos, int phs, string ann) {
+	snp_data(int ac, int pos, int phs, string ann, list<int> hi) {
 		allele_count = ac;
 		position = pos;
 		phased = phs;
 		annotation = ann;
+		if (ac <= ac_for_list) { 
+			rare = 1; 
+			hap_ids = hi;
+		}
 	}
 	bool isSingleton() {
 		if(allele_count == 1) {
@@ -279,6 +294,7 @@ class vcf_data {
 			stringstream s(line);
 			string junk, ref, alt, hap, info;
 			int phys;
+			list<int> hap_ids;
 			s >> chr_num >> phys >> junk >> ref >> alt >> junk >> junk >> info;
 			vector<string> info_s = split(info,";");
 			if(ref.size() != 1 || isIndel(info_s) || isCpg(info_s)) {
@@ -304,16 +320,18 @@ class vcf_data {
 				if(phased == -1) { phased = (hap[1] == '|') ? 1 : 0; }
 				if(hap[0] != '0') { 
 					ac++;
+					hap_ids.push_back(ind_idx);
 				}
 				if(hap[2] != '0') {
 					ac++;
+					hap_ids.push_back(ind_idx+1);
 				}
 				addGeno(hap_hold[ind_idx],hap[0],snp_num);
-				ind_idx++;
-				addGeno(hap_hold[ind_idx],hap[2],snp_num);
-				ind_idx++;
+				//ind_idx++;
+				addGeno(hap_hold[ind_idx+1],hap[2],snp_num);
+				ind_idx+=2;
 			}
-			snp_data snp(ac,phys,phased,annotation);
+			snp_data snp(ac,phys,phased,annotation,hap_ids);
 			snps.push_back(snp);
 			vector_set = 1;
 			snp_num++;
@@ -660,11 +678,16 @@ list<int> getModList(list<int> & haps, int sw) {
 bool fillStoppingPoint(vcf_data & vcf, hapset & h, maxhapdata & mhd, list<int> & comp_haps, int snp_idx) {
 	list<int>::iterator i = comp_haps.begin();
 	while(i != comp_haps.end()) {
+		if(mhd.cutoffs[*i] != -1) {
+			comp_haps.erase(i++);
+			continue;
+		}
 		char rare_hap = vcf.getHap(h.hap_id,snp_idx);
 		char current_hap = vcf.getHap(*i,snp_idx);
 		if(rare_hap != current_hap) {
 			mhd.cutoffs[*i] = snp_idx;
 			comp_haps.erase(i++);
+			mhd.remaining -= 1;
 		} else { 
 			++i;
 		}
@@ -674,6 +697,32 @@ bool fillStoppingPoint(vcf_data & vcf, hapset & h, maxhapdata & mhd, list<int> &
 	return 0;
 }
 
+bool fillStoppingRare(vcf_data & vcf, hapset & h, maxhapdata & mhd, int snp_idx) {
+	bool included = 0;
+	//for(int i = 0; i < mhd.cutoffs.size(); i++) {
+	//	cout << i << '\t' << mhd.cutoffs[i] << endl;
+	//}
+	//cout << snp_idx << '\t' << h.hap_id << ":\t";
+	for(auto ii = vcf.snps[snp_idx].hap_ids.begin(); ii != vcf.snps[snp_idx].hap_ids.end(); ii++) {
+		//cout << *ii << '\t';
+		if (h.hap_id == *ii) {
+			included = 1;
+			break;
+		}
+	}
+	//cout << endl;
+	if (included) { return 0; }
+	for(auto ii = vcf.snps[snp_idx].hap_ids.begin(); ii != vcf.snps[snp_idx].hap_ids.end(); ii++) {
+		//cout << *ii << "\t" << mhd.cutoffs[*ii] << "\n";
+		if(mhd.cutoffs[*ii] == -1) {
+			mhd.cutoffs[*ii] = snp_idx;
+			mhd.remaining -= 1;
+			//cout << "found: " << mhd.cutoffs[*ii] << endl;
+		}
+	}
+	return 1;
+}
+
 
 void findMax(vcf_data & vcf, hapset & h) {
 	list<int> c_left = h.hap_idx_list;
@@ -681,6 +730,13 @@ void findMax(vcf_data & vcf, hapset & h) {
 	int i = h.snp_id-1;
 	for(i = h.snp_id-1; i > 0; i--) {
 		if(!vcf.snps[i].isValidForComp()) { continue; }
+		if(vcf.snps[i].rare) {
+			bool success = fillStoppingRare(vcf,h,h.data_left,i);
+			if (h.data_left.remaining == 0) { 
+				//cout << "ENDED\n";
+				break; }
+			if (success) { continue; }
+		}
 		bool filled = fillStoppingPoint(vcf,h,h.data_left,c_left,i);
 		if(filled) {
 			break;
@@ -696,6 +752,13 @@ void findMax(vcf_data & vcf, hapset & h) {
 	i = h.snp_id+1;
 	for(i = h.snp_id+1; i < vcf.snp_count - 1; i++) {
 		if(!vcf.snps[i].isValidForComp()) { continue; }
+		if(vcf.snps[i].rare) {
+			bool success = fillStoppingRare(vcf,h,h.data_right,i);
+			if (h.data_right.remaining == 0) { 
+				//cout << "ENDED\n";
+				break; }
+			if (success) { continue; }
+		}
 		bool filled = fillStoppingPoint(vcf,h,h.data_right,c_right,i);
 		if(filled) {
 			break;
@@ -712,14 +775,14 @@ void findMax(vcf_data & vcf, hapset & h) {
 }
 
 void printVerify(vcf_data & vcf, hapset & h) {
-	cout << h.snp_id << endl;
+	cout << "HAP ID: " << h.snp_id << endl;
 	cout << h.hap_id << '\t';
 	for(int i = h.snp_id; i >= h.data_left.maxhap; i--) {
 		cout << int(vcf.getHap(h.hap_id,i));
 	}
 	cout << endl;
 	for(auto itr = h.hap_idx_list.begin(); itr != h.hap_idx_list.end(); ++itr) {
-		cout << *itr << '\t';
+		cout << *itr << '\t' << h.data_left.cutoffs[*itr] << '\t';
 		for(int i = h.snp_id; i >= h.data_left.cutoffs[*itr]; i--) {
 			cout << int(vcf.getHap(*itr,i));
 		}
@@ -732,7 +795,7 @@ void printVerify(vcf_data & vcf, hapset & h) {
 	}
 	cout << endl;
 	for(auto itr = h.hap_idx_list.begin(); itr != h.hap_idx_list.end(); ++itr) {
-		cout << *itr << '\t';
+		cout << *itr << '\t' << h.data_right.cutoffs[*itr] << '\t';
 		for(int i = h.snp_id; i <= h.data_right.cutoffs[*itr]; i++) {
 			cout << int(vcf.getHap(*itr,i));
 		}
