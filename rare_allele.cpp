@@ -14,6 +14,7 @@ using namespace std;
 
 typedef unsigned char uchar;
 using vvchar = vector<vector<char> >;
+using pint = pair<int,int>;
 
 vector<ofstream*> of_vec;
 int range_start = 1;
@@ -22,6 +23,8 @@ int compress_flag = 0;
 int no_gen_map = 1;
 int ignore_singletons = 0;
 int ac_for_list = 100;
+int matrix_flag = 2; //0 means run original mode, 1 means run only matrix mode, 2 means both
+int subsample_pairs = 10; //For k greater than this value, 5*k pairs will be subsampled and other matrix values replaced with -2
 
 
 
@@ -109,6 +112,8 @@ bool isIndel(vector<string> & info_s) {
 	}
 	return 0;
 }
+
+
 
 
 
@@ -430,8 +435,148 @@ class vcf_data {
 	}
 };
 
+list<pint> createSubPairs(int ac) {
+	vector<pint> hold;
+	list<pint> out;
+	for (int i = 0; i < ac; i++) {
+		for (int j = 0; j < i; j++) {
+			pint p;
+			p.first = i;
+			p.second = j;
+			hold.push_back(p);
+		}
+	}
+	random_shuffle(hold.begin(),hold.end());
+	for (int i = 0; i < 5*ac; i++) {
+		out.push_back(hold[i]);
+	}
+	return out;
+}
+
+list<pint> createPairs(int ac) {
+	list<pint> out;
+	for(int i = 0; i < ac; i++) {
+		for (int j = 0; j < i; j++) {
+			pint p;
+			p.first = i;
+			p.second = j;
+			out.push_back(p);
+		}
+	}
+	return out;
+}
+
+
+class rare_matrix {
+	public:
+	int ** distmat_left;
+	int ** distmat_right;
+	list<pint> active_idx, active_left, active_right;
+	int * hap_idx;
+	int ac;
+	int snp_num;
+	rare_matrix() { };
+	rare_matrix(int allele_count, vector<int> & rs, vector<int> & rd, int sn) {
+		ac = allele_count;
+		snp_num = sn;
+		cout << "SN: " << sn << " SNP " << snp_num << endl;
+		hap_idx = new int[allele_count];
+		distmat_left = new int*[allele_count];
+		distmat_right = new int*[allele_count];
+		if (allele_count > subsample_pairs) {
+			active_idx = createSubPairs(allele_count);
+		} else {
+			active_idx = createPairs(allele_count);
+		}
+		active_left = active_idx;
+		active_right = active_idx;
+		for(int i = 0; i < rs.size(); i++) {
+			hap_idx[i] = rs[i];
+		}
+		for(int i = rs.size(); i < rs.size()+rd.size(); i++) {
+			hap_idx[i] = rd[i-rs.size()];
+		}
+		for(int i = 1; i < allele_count; i++) {
+			distmat_left[i] = new int[i];
+			distmat_right[i] = new int[i];
+			for (int j = 0; j < i; j++) {
+				distmat_left[i][j] = -2;
+				distmat_right[i][j] = -2;
+			}
+		}
+		//for (int i = 0; i < active_idx.size(); i++) {
+		for (auto itr = active_idx.begin(); itr != active_idx.end(); itr++) {
+			distmat_left[itr->first][itr->second] = -1;
+			distmat_right[itr->first][itr->second] = -1;
+		}
+	}
+	bool fillMat(vcf_data & vcf, int snp_idx, int ** distmat, list<pint> & idx) {
+		//int total_left = ac*(ac-1)/2;
+		/*for (int i = 1; i < ac; i++) {
+			for (int j = 0; j < i; j++) {
+				if (distmat[i][j] != -1) {
+					//total_left -= 1;
+					continue;
+				}
+				char hap1 = vcf.getHap(hap_idx[i],snp_idx);
+				char hap2 = vcf.getHap(hap_idx[j],snp_idx);
+				if (hap1 != hap2) {
+					distmat[i][j] = snp_idx;
+				}
+			}
+		}*/
+		auto el = idx.begin();
+		while (el != idx.end()) {
+			int i = el->first;
+			int j = el->second;
+			if (distmat[i][j] != -1) { 
+				el++;				
+				continue;
+			}
+			char hap1 = vcf.getHap(hap_idx[i],snp_idx);
+			char hap2 = vcf.getHap(hap_idx[j],snp_idx);
+			if (hap1 != hap2) {
+				distmat[i][j] = snp_idx;
+				idx.erase(el++);
+			}
+			else { 
+				el++;
+			}
+		}
+		return (idx.size() == 0);
+					
+
+	}
+	void endSide(int val, int ** distmat) {
+		for (int i = 1; i < ac; i++) {
+			for (int j = 0; j < i; j++) {
+				if (distmat[i][j] == -1) {
+					distmat[i][j] = val;
+				}
+			}
+		}
+	}
+	void fillMats(vcf_data & vcf) {
+		int i;
+		for(i = snp_num-1; i > 0; i--) {
+			if (!vcf.snps[i].isValidForComp()) { continue; }
+			if (fillMat(vcf,i,distmat_left,active_left)) { break; }
+		}
+		if (i <= 0) { endSide(0,distmat_left); }
+		for (i = snp_num+1; i < vcf.snp_count - 1; i++) {
+			if (!vcf.snps[i].isValidForComp()) { continue; }
+			if(fillMat(vcf,i,distmat_right,active_right)) { break; }
+		}
+		if (i >= vcf.snp_count - 1) {
+			endSide(vcf.snp_count-1,distmat_right);
+		}
+		
+
+	}
+};
+
 string ast(int a, bool b) {
-	//cout << a;
+	cout << a << endl;
 	stringstream s("");
 	s << a;
 	if(b) {
@@ -442,7 +587,7 @@ string ast(int a, bool b) {
 }
 
 string ast(double a, bool b) {
-	//cout << a;
+	cout << a << endl;
 	stringstream s("");
 	s << a;
 	if(b) {
@@ -503,13 +648,162 @@ class output_data {
 
 	}
 	output_data() { }
-	void printData() {
-		*of_vec[count - range_start] << chr_num << '\t' << pos << '\t' << ast(p1_5_bp,end_flags[0]) << ast(p1_3_bp,end_flags[1]) << ast(p2_5_bp,end_flags[2]) << ast(p2_3_bp,end_flags[3]);
+	void printData(bool mult) {
+		*of_vec[count - range_start] << chr_num << '\t' << pos << '\t';
+		*of_vec[count - range_start] << ast(p1_5_bp,end_flags[0]);
+		*of_vec[count-range_start] << ast(p1_3_bp,end_flags[1]) << ast(p2_5_bp,end_flags[2]) << ast(p2_3_bp,end_flags[3]);
 		if(no_gen_map == 0) { *of_vec[count-range_start] << ast(p1_5_gen,end_flags[4]) << ast(p1_3_gen,end_flags[5]) << ast(p2_5_gen,end_flags[6]) << ast(p2_3_gen,end_flags[7]); }
-		*of_vec[count-range_start] << ann << endl;
+		*of_vec[count-range_start] << ann;
+		if(!mult) { *of_vec[count-range_start] << endl; }
 	}
 
 
+
+};
+
+
+
+class mx_output {
+	public:
+	list<output_data> od;
+	rare_matrix mat;
+	int ac;
+	int snp_idx;
+	mx_output() { };
+	mx_output(list<output_data> & l, rare_matrix & m) {
+		od = l;
+		mat = m;
+		ac = m.ac;
+		snp_idx = m.snp_num;
+		cout << "M: " << m.snp_num << " SI " << snp_idx << endl;
+	}
+	void print() {
+		cout << "AC: " << ac << endl;
+		cout << "SNP_IDX: " << snp_idx << endl;
+		for(int i = 0; i < ac; i++) {
+			for(int j = 0; j < ac; j++) {
+				if (i > j) { 
+					cout << mat.distmat_left[i][j] << '\t';
+				} else if (i < j) {
+					cout << mat.distmat_left[j][i] << '\t';
+				} else { cout << "0\t"; }
+			} 
+			cout << "\t";
+			for(int j = 0; j < ac; j++) {
+				if (i > j) { 
+					cout << mat.distmat_right[i][j] << '\t';
+				} else if (i < j) {
+					cout << mat.distmat_right[j][i] << '\t';
+				} else { cout << "0\t"; }
+			}
+			cout << endl;
+		}
+	}
+		
+};
+
+int ** intInit(int s) {
+	int ** out = new int*[s];
+	for(int i = 0; i < s; i++) {
+		out[i] = new int[s];
+		for(int j = 0; j < s; j++) {
+			out[i][j] = 0;
+		}
+	}
+	return out;
+}
+
+double ** doubleInit(int s) {
+	double ** out = new double*[s];
+	for(int i = 0; i < s; i++) {
+		out[i] = new double[s];
+		for(int j = 0; j < s; j++) {
+			out[i][j] = 0;
+		}
+	}
+	return out;
+}
+
+void boolInit(bool ** b, int s) {
+	cout << "BI " << s << endl;
+	b = new bool*[s];
+	for (int i = 0; i < s; i++) {
+		b[i] = new bool[s];
+		for(int j = 0; j < s; j++) {
+			b[i][j] = 0;
+		}
+	}
+}
+
+class mx_print{
+	public:
+	int ** left_pos;
+	int ** right_pos;
+	double ** left_gen;
+	double ** right_gen;
+	int ** left_ends;
+	int ** right_ends;
+	int ac;
+	int snp_idx;
+	mx_print() { };
+	mx_print(vcf_data & vcf, mx_output & m) {
+		ac = m.ac;
+		snp_idx = m.snp_idx;
+		left_pos = intInit(ac);
+		right_pos = intInit(ac);
+		left_gen = doubleInit(ac);
+		right_gen = doubleInit(ac);
+		left_ends = intInit(ac);
+		right_ends = intInit(ac);
+		for (int i = 0; i < ac; i++) {
+			for (int j = 0; j < ac; j++) {
+				if (i == j) {
+					left_pos[i][j] = 0;
+					right_pos[i][j] = 0;
+					left_gen[i][j] = 0;
+					right_gen[i][j] = 0;
+					left_ends[i][j] = 0;
+					right_ends[i][j] = 0;
+				} else if (i > j) {
+					right_pos[i][j] = vcf.getSnpDist(m.mat.distmat_right[i][j],snp_idx);
+					left_pos[i][j] = vcf.getSnpDist(snp_idx,m.mat.distmat_left[i][j]);
+					right_gen[i][j] = vcf.getSnpGm(m.mat.distmat_right[i][j],snp_idx);
+					left_gen[i][j] = vcf.getSnpGm(snp_idx,m.mat.distmat_left[i][j]);
+					if (m.mat.distmat_right[i][j] == vcf.snp_count-1) { right_ends[i][j] = 1; }
+					if (m.mat.distmat_left[i][j] == 0) { left_ends[i][j] = 1; }
+				} else {
+					right_pos[i][j] = vcf.getSnpDist(m.mat.distmat_right[j][i],snp_idx);
+					left_pos[i][j] = vcf.getSnpDist(snp_idx,m.mat.distmat_left[j][i]);
+					right_gen[i][j] = vcf.getSnpGm(m.mat.distmat_right[j][i],snp_idx);
+					left_gen[i][j] = vcf.getSnpGm(snp_idx,m.mat.distmat_left[j][i]);
+					if (m.mat.distmat_right[j][i] == vcf.snp_count-1) { 
+						right_ends[i][j] = 1; }
+					if (m.mat.distmat_left[j][i] == 0) { 
+						left_ends[i][j] = 1; }
+
+				}
+			}
+		}
+	}
+	void printRow(int row) {
+		*of_vec[ac-range_start] << '\t';
+		for(int j = 0; j < ac; j++) {
+			*of_vec[ac-range_start] << ast(right_pos[row][j],right_ends[row][j]);
+		}
+		for(int j = 0; j < ac; j++) {
+			*of_vec[ac-range_start] << ast(left_pos[row][j],left_ends[row][j]);
+		}
+		if(no_gen_map == 0) {
+			for(int j = 0; j < ac; j++) {
+				*of_vec[ac-range_start] << ast(right_gen[row][j],right_ends[row][j]);
+			}
+			for(int j = 0; j < ac; j++) {
+				*of_vec[ac-range_start] << ast(left_gen[row][j],left_ends[row][j]);
+			}
+		}
+		*of_vec[ac-range_start] << endl;
+	}
+		
 
 };
 
@@ -699,10 +993,6 @@ bool fillStoppingPoint(vcf_data & vcf, hapset & h, maxhapdata & mhd, list<int> &
 
 bool fillStoppingRare(vcf_data & vcf, hapset & h, maxhapdata & mhd, int snp_idx) {
 	bool included = 0;
-	//for(int i = 0; i < mhd.cutoffs.size(); i++) {
-	//	cout << i << '\t' << mhd.cutoffs[i] << endl;
-	//}
-	//cout << snp_idx << '\t' << h.hap_id << ":\t";
 	for(auto ii = vcf.snps[snp_idx].hap_ids.begin(); ii != vcf.snps[snp_idx].hap_ids.end(); ii++) {
 		//cout << *ii << '\t';
 		if (h.hap_id == *ii) {
@@ -804,11 +1094,14 @@ void printVerify(vcf_data & vcf, hapset & h) {
 }
 
 
-list<output_data> findLongestHaps(vcf_data & vcf, int idx) {
+mx_output findLongestHaps(vcf_data & vcf, int idx) {
+	mx_output out;
 	vector<int> rare_idx;
 	vector<hapset> vh;
 	list<output_data> out_list;
-	if(vcf.snps[idx].allele_count == 1) {
+	out.ac = vcf.snps[idx].allele_count;
+	if (matrix_flag != 1 && vcf.snps[idx].allele_count == 1) {
+	//if(vcf.snps[idx].allele_count == 1) {
 		vector<int> rare_idx;
 		list<int> comparison_haps = getSampleListSingle(vcf,idx,rare_idx,0);
 		hapset h1(rare_idx[0],idx,vcf.hap_count,comparison_haps,rare_idx[1]);
@@ -816,17 +1109,12 @@ list<output_data> findLongestHaps(vcf_data & vcf, int idx) {
 		findMax(vcf,h1);
 		findMax(vcf,h2);
 		output_data od(vcf,h1,h2);
-		out_list.push_back(od);
-		//cout << vcf.snps[idx].position << endl;
-		//printVerify(vcf,h1);
-		//printVerify(vcf,h2);
-		//od.printData();
+		out.od.push_back(od);
 	} else { 
 		vector<int> rare_single, rare_double;
 		list<int> comparison_haps = getSampleListMult(vcf,idx,rare_single,rare_double,0);
-		//for(int ip = 0; ip < rare_single.size(); ip++) {
-		//	cout << rare_single[ip] << endl;
-		//}
+		if (matrix_flag != 1) {
+		cout << "GENERATING STUFF\n";
 		for(int i = 0; i < rare_single.size(); i++) {
 			hapset h1(rare_single[i],idx,vcf.hap_count,comparison_haps);
 			int sw_person;
@@ -840,30 +1128,57 @@ list<output_data> findLongestHaps(vcf_data & vcf, int idx) {
 			findMax(vcf,h1);
 			findMax(vcf,h2);
 			output_data od(vcf,h1,h2);
-			out_list.push_back(od);
+			out.od.push_back(od);
 			//od.printData();
 		}
 		for(int i = 0; i < rare_double.size(); i+=2) {
 			hapset h1(rare_double[i],idx,vcf.hap_count,comparison_haps);
 			findMax(vcf,h1);
 			output_data od(vcf,h1);
-			out_list.push_back(od);
+			out.od.push_back(od);
 			//od.printData();
 			hapset h2(rare_double[i+1],idx,vcf.hap_count,comparison_haps);
 			findMax(vcf,h2);
 			output_data od2(vcf,h2);
-			out_list.push_back(od2);
+			out.od.push_back(od2);
 			//od2.printData();
 		}
+		}
+		if(matrix_flag != 0) {
+			rare_matrix rm(vcf.snps[idx].allele_count,rare_single,rare_double,idx);
+			rm.fillMats(vcf);
+			out.mat = rm;
+			out.ac = rm.ac;
+			out.snp_idx = rm.snp_num;
+			out.print();
+		}
 	}
-	return out_list;
+	//for (auto ii = out_list.begin(); ii != out_list.end(); ii++) {
+	//	out.od.push_back(*ii);
+	//}
+		
+	//out.od = out_list;
+	return out;
 }
 		
-int printCurrentResults(list<output_data> * ol, bool * flags, int max, int & prevcount) {
+int printCurrentResults(vcf_data & vcf, mx_output * ol, bool * flags, int max, int & prevcount) {
 	for (int i = prevcount; i < max; i++) {
 		if (flags[i] == 0) { return 0; }
-		for (auto itr = ol[i].begin(); itr != ol[i].end(); ++itr) {
-			(*itr).printData();
+		bool mult = (ol[i].ac != 1) && (matrix_flag != 0);
+		int cur_idx = 0;
+		mx_print *mp;
+		if(mult) {
+			//mx_print t(vcf,ol[i]);
+			mp = new mx_print(vcf,ol[i]);
+		}
+		for (auto itr = ol[i].od.begin(); itr != ol[i].od.end(); ++itr) {
+			if(matrix_flag != 1) {
+				(*itr).printData(mult);
+			}
+			if(mult) {
+				mp->printRow(cur_idx);
+			}
+			cur_idx++;
 		}
 		prevcount++;
 	}
@@ -888,6 +1203,7 @@ int main(int argc, char ** argv) {
 		else if(arg == "-c") { compress_flag = 1; }
 		else if(arg == "-p") { pos_start = atoi(argv[++i]); }
 		else if(arg == "--ignore-singletons") { ignore_singletons = 1; }
+		else if(arg == "-matf") { matrix_flag = atoi(argv[++i]); }
 		else {
 			cerr << "Invalid option: " << arg << endl;
 			return 0;
@@ -909,7 +1225,8 @@ int main(int argc, char ** argv) {
 	vector<int> rareIdx = v.getRareIdx(range_start,range_end,pos_start);
 
 	//v.print();
-	list<output_data> * output_hold = new list<output_data>[rareIdx.size()];
+	//list<output_data> * output_hold = new list<output_data>[rareIdx.size()];
+	mx_output * output_hold = new mx_output[rareIdx.size()];
 	bool * output_flag = new bool[rareIdx.size()];
 
 	for(int i = 0; i < rareIdx.size(); i++) {
@@ -923,12 +1240,12 @@ int main(int argc, char ** argv) {
 		int i = rareIdx[ii];
 		output_hold[ii] = findLongestHaps(v,i);
 		output_flag[ii] = 1;
-		if (ii%1000 == 0) {
+		if (ii%10 == 0) {
 			#pragma omp critical
-			printCurrentResults(output_hold,output_flag,rareIdx.size(),output_loc);
+			printCurrentResults(v,output_hold,output_flag,rareIdx.size(),output_loc);
 		}
 	}
-	printCurrentResults(output_hold,output_flag,rareIdx.size(),output_loc);
+	printCurrentResults(v,output_hold,output_flag,rareIdx.size(),output_loc);
 	return 0;
 }
 
