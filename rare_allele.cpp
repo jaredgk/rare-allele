@@ -368,9 +368,11 @@ class vcf_data {
 		return out;
 	}
 	int getSnpDist(int base, int end) {
+		if (base == -2 || end == -2) { return -2; }
 		return snps[base].position - snps[end].position;
 	}
 	double getSnpGm(int base, int end) {
+		if (base == -2 || end == -2) { return -2; }
 		return snps[base].genetic_position - snps[end].genetic_position;
 	}
 	void addGenData(string filename, int offset) {
@@ -576,7 +578,7 @@ class rare_matrix {
 };
 
 string ast(int a, bool b) {
-	cout << a << endl;
+	//cout << a << endl;
 	stringstream s("");
 	s << a;
 	if(b) {
@@ -587,7 +589,7 @@ string ast(int a, bool b) {
 }
 
 string ast(double a, bool b) {
-	cout << a << endl;
+	//cout << a << endl;
 	stringstream s("");
 	s << a;
 	if(b) {
@@ -675,7 +677,7 @@ class mx_output {
 		mat = m;
 		ac = m.ac;
 		snp_idx = m.snp_num;
-		cout << "M: " << m.snp_num << " SI " << snp_idx << endl;
+		//cout << "M: " << m.snp_num << " SI " << snp_idx << endl;
 	}
 	void print() {
 		cout << "AC: " << ac << endl;
@@ -725,7 +727,7 @@ double ** doubleInit(int s) {
 }
 
 void boolInit(bool ** b, int s) {
-	cout << "BI " << s << endl;
+	//cout << "BI " << s << endl;
 	b = new bool*[s];
 	for (int i = 0; i < s; i++) {
 		b[i] = new bool[s];
@@ -1022,9 +1024,7 @@ void findMax(vcf_data & vcf, hapset & h) {
 		if(!vcf.snps[i].isValidForComp()) { continue; }
 		if(vcf.snps[i].rare) {
 			bool success = fillStoppingRare(vcf,h,h.data_left,i);
-			if (h.data_left.remaining == 0) { 
-				//cout << "ENDED\n";
-				break; }
+			if (h.data_left.remaining == 0) { break; }
 			if (success) { continue; }
 		}
 		bool filled = fillStoppingPoint(vcf,h,h.data_left,c_left,i);
@@ -1033,10 +1033,8 @@ void findMax(vcf_data & vcf, hapset & h) {
 		}
 	}
 	h.data_left.maxhap = (i >= 0 ? i : 0);
-	//cout << i << endl;
 	if(i <= 0) {
 		h.fillLeft(0);
-		//cout << "filling left side\n";
 	}
 	list<int> c_right = h.hap_idx_list;
 	i = h.snp_id+1;
@@ -1044,9 +1042,7 @@ void findMax(vcf_data & vcf, hapset & h) {
 		if(!vcf.snps[i].isValidForComp()) { continue; }
 		if(vcf.snps[i].rare) {
 			bool success = fillStoppingRare(vcf,h,h.data_right,i);
-			if (h.data_right.remaining == 0) { 
-				//cout << "ENDED\n";
-				break; }
+			if (h.data_right.remaining == 0) { break; }
 			if (success) { continue; }
 		}
 		bool filled = fillStoppingPoint(vcf,h,h.data_right,c_right,i);
@@ -1055,11 +1051,9 @@ void findMax(vcf_data & vcf, hapset & h) {
 		}
 	}
 	h.data_right.maxhap = i;
-	//cout << i << " " << vcf.snp_count << endl;
 	if(i >= vcf.snp_count-1) {
 		h.fillRight(vcf.snp_count-1);
 		h.data_right.maxhap = vcf.snp_count-1;
-		//cout << "filling right side " << vcf.snp_count << endl;
 	}
 
 }
@@ -1114,7 +1108,6 @@ mx_output findLongestHaps(vcf_data & vcf, int idx) {
 		vector<int> rare_single, rare_double;
 		list<int> comparison_haps = getSampleListMult(vcf,idx,rare_single,rare_double,0);
 		if (matrix_flag != 1) {
-		cout << "GENERATING STUFF\n";
 		for(int i = 0; i < rare_single.size(); i++) {
 			hapset h1(rare_single[i],idx,vcf.hap_count,comparison_haps);
 			int sw_person;
@@ -1150,14 +1143,9 @@ mx_output findLongestHaps(vcf_data & vcf, int idx) {
 			out.mat = rm;
 			out.ac = rm.ac;
 			out.snp_idx = rm.snp_num;
-			out.print();
+			//out.print();
 		}
 	}
-	//for (auto ii = out_list.begin(); ii != out_list.end(); ii++) {
-	//	out.od.push_back(*ii);
-	//}
-		
-	//out.od = out_list;
 	return out;
 }
 		
@@ -1168,7 +1156,6 @@ int printCurrentResults(vcf_data & vcf, mx_output * ol, bool * flags, int max, i
 		int cur_idx = 0;
 		mx_print *mp;
 		if(mult) {
-			//mx_print t(vcf,ol[i]);
 			mp = new mx_print(vcf,ol[i]);
 		}
 		for (auto itr = ol[i].od.begin(); itr != ol[i].od.end(); ++itr) {
@@ -1223,24 +1210,19 @@ int main(int argc, char ** argv) {
 		of_vec.push_back(op);
 	}
 	vector<int> rareIdx = v.getRareIdx(range_start,range_end,pos_start);
-
-	//v.print();
-	//list<output_data> * output_hold = new list<output_data>[rareIdx.size()];
 	mx_output * output_hold = new mx_output[rareIdx.size()];
 	bool * output_flag = new bool[rareIdx.size()];
 
 	for(int i = 0; i < rareIdx.size(); i++) {
 		output_flag[i] = 0;
-
 	}
-	//return 0;
 	int output_loc = 0;
 	#pragma omp parallel for ordered schedule(dynamic,50)
 	for (int ii = 0; ii < rareIdx.size(); ii++) {
 		int i = rareIdx[ii];
 		output_hold[ii] = findLongestHaps(v,i);
 		output_flag[ii] = 1;
-		if (ii%10 == 0) {
+		if (ii%1000 == 0) {
 			#pragma omp critical
 			printCurrentResults(v,output_hold,output_flag,rareIdx.size(),output_loc);
 		}
